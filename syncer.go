@@ -20,6 +20,7 @@ type Syncer struct {
 	stopChan chan struct{}
 	stopped  atomic.Bool
 
+	mutex       sync.RWMutex
 	deletedList []int
 	unitList    []runner
 
@@ -54,7 +55,7 @@ func (s *Syncer) run() {
 	for {
 		select {
 		case <-s.nextChan:
-			s.runFuncs()
+			s.runUnits()
 		case <-s.stopChan:
 			return
 		case <-s.pauseChan:
@@ -108,9 +109,11 @@ func (s *Syncer) changeSpeed(v int) error {
 	return nil
 }
 
-func (s *Syncer) runFuncs() {
+func (s *Syncer) runUnits() {
 	t := time.Now()
 	var wg sync.WaitGroup
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	for k := range s.unitList {
 		if s.unitList[k].deleted {
 			continue
@@ -127,6 +130,8 @@ func (s *Syncer) runFuncs() {
 }
 
 func (s *Syncer) Add(u Unit) (int, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	var key int
 	if l := len(s.deletedList); l > 0 {
 		key = s.deletedList[l-1]
@@ -151,6 +156,8 @@ func (s *Syncer) Remove(key int) error {
 	if key < 0 && key >= len(s.unitList) {
 		return ErrFuncNotFound
 	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.unitList[key].deleted = true
 	s.deletedList = append(s.deletedList, key)
 	return nil
@@ -169,16 +176,17 @@ func (s *Syncer) Play() error {
 	if !s.paused.Load() {
 		return ErrNotPaused
 	}
-
+	s.paused.Store(false)
+	s.unPauseChan <- struct{}{}
 	return nil
 }
 
-func (s *Syncer) Slower() error {
-	return nil
+func (s *Syncer) Slower() {
+	s.ChangeSpeed(-2)
 }
 
-func (s *Syncer) Faster() error {
-	return nil
+func (s *Syncer) Faster() {
+	s.ChangeSpeed(2)
 }
 
 func (s *Syncer) Stop() error {
